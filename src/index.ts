@@ -5,10 +5,9 @@ import {
   Vector,
   Points,
   Vector2D,
-  PathValue,
-  Value,
   SourceRect,
   Property,
+  SourceText,
 } from 'expression-globals-typescript';
 
 const thisProperty = new PathProperty([[0, 0]]);
@@ -273,6 +272,7 @@ function getFunctions(time: number = thisLayer.time) {
     sampleTime: number;
     anchor: Anchor;
     xHeight: boolean;
+    consistentLeading: boolean;
   };
 
   /**
@@ -281,6 +281,7 @@ function getFunctions(time: number = thisLayer.time) {
    * @param options.sampleTime When in time to get the layers properties
    * @param options.anchor Which point in the layer to get the position of
    * @param options.xHeight Whether to get the descenderless height value, defaults to true if `options.layer` is a text layer
+   * @param options.consistentLeading Whether to calculate `leading` of each line or of root TextStyle
    * @returns An object with the layers size and position from `sourceRectAtTime`, as well as the sourceRect itself: `{ size, position, sourceRect }`
    */
   function layerRect({
@@ -288,6 +289,7 @@ function getFunctions(time: number = thisLayer.time) {
     sampleTime = time,
     anchor = 'center',
     xHeight = true,
+    consistentLeading = true,
   }: LayerRectProps): {
     position: Vector;
     size: Vector;
@@ -298,12 +300,35 @@ function getFunctions(time: number = thisLayer.time) {
     let topLeft: Vector2D = [left, top];
 
     if (layer.text && xHeight) {
-      const { fontSize, leading, autoLeading } = layer.text.sourceText.style;
-      const lineGap = autoLeading ? fontSize * 1.2 : leading;
-      const textSize = fontSize / 2;
-      const numLines = textCount(layer.text.sourceText.value, 'line');
-      height = lineGap * (numLines - 1) + textSize;
-      topLeft = [left, -textSize];
+      const sourceText = layer.text.sourceText;
+
+      const lines = sourceText.value.trim().split(/[\r\n\3]/);
+      const numLines = Math.max(lines.length, 0);
+
+      const lineHeight = getLineHeight(sourceText);
+      let xHeightValue = sourceText.style.fontSize / 2;
+      height = lineHeight * (numLines - 1) + xHeightValue;
+
+      if (!consistentLeading) {
+        let currentIndex = 0;
+
+        const totalLineHeight = lines.reduce((total, line) => {
+          const lineHeight = getLineHeight(sourceText, currentIndex);
+          currentIndex += line.length + 1;
+          return total + lineHeight;
+        }, 0);
+
+        xHeightValue = sourceText.getStyleAt(0).fontSize / 2;
+        height = totalLineHeight - xHeightValue;
+      }
+
+      // @ts-expect-error TODO: update `expression-globals-typescript`
+      const { spaceAfter, spaceBefore } = sourceText.style;
+      const numParagraphs = sourceText.value.split('\r').length;
+      const paragraphSpacing = (spaceAfter + spaceBefore) * (numParagraphs - 1);
+
+      height += paragraphSpacing;
+      topLeft = [left, -xHeightValue];
     }
 
     const positions: { [key in Anchor]: Vector } = {
@@ -326,6 +351,14 @@ function getFunctions(time: number = thisLayer.time) {
       position: onOwnLayer ? position : layer.toComp(position),
       sourceRect: sourceRect,
     };
+
+    function getLineHeight(sourceText: SourceText, charIndex?: number) {
+      const { fontSize, leading, autoLeading } =
+        charIndex !== undefined
+          ? sourceText.getStyleAt(charIndex)
+          : sourceText.style;
+      return autoLeading ? fontSize * 1.2 : leading;
+    }
   }
 
   /**
